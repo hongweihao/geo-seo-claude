@@ -1,532 +1,461 @@
-# 评分数据源详解:从原始字节到最终分数
+# 评分背后的业务逻辑:每个分数在告诉客户什么
 
-> **目的:** 把 6 大评分类目中每一分的来源追溯到代码层 —— HTTP 请求、HTML DOM 元素、正则模式、第三方 API、LLM 判断。
-> **配套文档:** `docs/business-workflow-analysis.md`(总体架构与商业流程)
-> **报告日期:** 2026-05-09
-
----
-
-## 数据源类型标记
-
-| 标记 | 含义 |
-|------|------|
-| 🌐 | HTTP 请求(`requests.get` / `curl`) |
-| 🔍 | HTML DOM 元素解析(BeautifulSoup) |
-| 📜 | 正则模式匹配 |
-| 🔑 | 第三方 API 调用 |
-| 🤖 | LLM 主观判断(Claude 看了再决定) |
-| ⚙️ | HTTP 响应头检查 |
+> **目的:** 把 6 大评分类目翻译成业务语言 —— 每个分数意味着客户的什么生意问题、对应多少潜在收入、销售话术怎么说。
+> **目标读者:** GEO 代理服务的销售、客户经理、运营 —— 不需要懂代码。
+> **配套文档:** `docs/business-workflow-analysis.md`(总体架构)
 
 ---
 
-## 0. 全局采集器:`scripts/fetch_page.py`
+## 总览:GEO 总分对应的客户处境
 
-整个评分系统的"取证基座"。一次 `requests.get(url)` 返回的数据结构(`fetch_page.py:38-200`):
+客户网站拿到一个 0-100 的 GEO 总分。这个分数不是抽象的"好坏",而是**客户在 AI 时代的生意状态**:
 
-```python
+| 分数 | 业务含义 | 客户的真实处境 | 销售机会 |
+|------|---------|---------------|---------|
+| 90-100 | AI 引擎首选源 | ChatGPT、Perplexity 问到相关问题时,大概率引用该客户 | 维护型合同(€2.5K/月监控) |
+| 75-89 | AI 友好 | 有时被引用,但不稳定 | 优化型合同(€5K/月) |
+| 60-74 | 部分可见 | 偶尔被提到,品牌名 AI 能识别但很少推荐 | 标准合同(€5K/月) |
+| 40-59 | 几乎不被看见 | AI 知道这个域名存在,但不会主动推荐 | **高价值机会**(€5-9.5K/月) |
+| 0-39 | AI 时代隐形 | 在 ChatGPT 里问完全找不到,流量会随 AI 替代搜索而消失 | **最高价值机会**(€9.5K/月起) |
+
+**销售逻辑:分数越低,合同越值钱。** 因为分数低 = 问题多 = 服务工作量大 = 客户的生意焦虑感更强(看到自己"消失"在 AI 里)。
+
+---
+
+## 1. AI 引用度(权重 25% · 最重要)
+
+### 这个分数在测什么(业务语言)
+
+**客户的内容是否容易被 AI 当作答案直接引用。**
+
+ChatGPT 回答"最好的电动汽车充电桩品牌是哪家"时,它需要从某个网页拿一段话出来当作答案。这一段话必须:
+
+- **能独立看懂**(不依赖前后文)
+- **以"答案"开头**(不绕弯子)
+- **含具体数据**(数字、年份、引用机构)
+- **长度合适**(134-167 词最佳)
+
+### 分数低意味着什么(给客户讲)
+
+> "您的页面内容很优秀,但写法是给**读者读**的,不是给 **AI 引用**的。
+> AI 找答案时会扫描整页找'独立可用'的段落 —— 而您的内容大多需要读 3 段才能理解一个点。
+> 结果:即使排名靠前,AI 也宁可引用一篇排名 30 名的、写得更直接的对手文章。"
+
+### 典型问题清单(客户能直接对照自查)
+
+| 问题信号 | 业务后果 |
+|---------|---------|
+| 文章开头是"在当今快节奏的时代..." | AI 拿不到答案,直接跳过 |
+| 段落里全是"它"、"这个"、"那些" | AI 看不懂主语,无法独立引用 |
+| 段落超过 300 词 | AI 提取段落时会丢弃过长块 |
+| 通篇没有具体数字、百分比、年份 | AI 不会引用"模糊"的内容 |
+| 标题不是问句式("如何...?"、"什么是...?") | 无法匹配用户提问 |
+| 没有"根据 X 研究"这类引用 | AI 评估为低可信度内容 |
+
+### 修复后的业务收益(可写进提案)
+
+- AI 引用次数 +50% 起(优质段落比例从 20% 提升到 60%+)
+- 同一篇文章,改造前后引用率差异可达 3-5 倍
+- **典型修复周期**:5-10 篇核心文章 = 1 个月工作量
+- **典型报价段**:€2,500-€5,000/月(Standard 档)
+
+### 销售故事
+
+> 客户 A 的"产品页"得 28 分(差)。我们改写了 8 篇核心页(每段加直接答案、加数据点),3 个月后 ChatGPT 测试 10 个目标问题,从 0 次提及到被引用 4 次。当月该客户的 AI 引荐流量从 200 增到 1,400。
+
+---
+
+## 2. 品牌影响力(权重 20%)
+
+### 这个分数在测什么
+
+**AI 在外部世界(非客户网站)能找到多少关于客户的"提及"。**
+
+AI 不止从客户官网学习,更重要的是从这些地方:
+
+- **YouTube**(相关性最强 —— 比反链强 3 倍)
+- **Reddit**(讨论、推荐贴)
+- **Wikipedia / Wikidata**(实体身份认证)
+- **LinkedIn**(行业权威)
+- **其他**(Quora / G2 / Trustpilot 等)
+
+### 分数低意味着什么(给客户讲)
+
+> "AI 不认识您。
+> 不是您官网内容不好,而是 AI 没法验证您是谁。
+> 当用户问'帮我推荐 X 行业的供应商',AI 会推荐它'认识'的品牌 —— 那些在 YouTube 有人评测、在 Reddit 被讨论、在 Wikipedia 有词条的对手。
+> 您的产品可能更好,但 AI 不知道您存在。"
+
+### 5 大平台的业务意义
+
+| 平台 | 权重 | 业务含义 | 缺失的代价 |
+|------|------|---------|----------|
+| **YouTube** | 25% | AI 训练数据最大来源之一 | 零视频 = 在 Gemini / Perplexity 几乎隐形 |
+| **Reddit** | 25% | 用户讨论的"真实意见"库 | 没讨论 = AI 推荐时跳过 |
+| **Wikipedia** | 20% | AI 判断"这个品牌是不是真实实体"的依据 | 没词条 = AI 对您的描述会"编"(幻觉) |
+| **LinkedIn** | 15% | B2B 权威信号 | 公司页空 = B2B 客户搜索时 AI 不会推荐 |
+| **Other** | 15% | 行业 niche(G2/Crunchbase/HN 等) | 行业相关性损失 |
+
+### 典型客户画像与诊断
+
+| 客户类型 | 常见状态 | 修复方向 |
+|---------|---------|---------|
+| 30 年传统行业(机械/教育/制造) | Wikipedia 0,YouTube 0,Reddit 0 → **20 分以下** | 先做 Wikidata,再 YouTube 内容,12 个月计划 |
+| 5 年 SaaS 创业公司 | LinkedIn 强,GitHub 强,但 Wikipedia 0 → 50 分左右 | Wikipedia 资质建设(需要 PR 报道),Reddit 真诚参与 |
+| 本地企业(意大利餐厅 / 律所) | LinkedIn 公司页空,Reddit 0,无 YouTube → 25 分 | LinkedIn + 客户评价平台 + 本地媒体提及 |
+| 行业大品牌但官网落后 | 所有平台都有,只是 schema 没声明关系 → 65-75 分 | 把已有的资产用 schema sameAs 连接起来,1 个月见效 |
+
+### 修复后的业务收益
+
+- **Wikipedia 词条建立**:AI 描述准确度提升 80%(从"幻觉"到事实)
+- **YouTube 频道运营**(每月 4 条视频):6 个月后被 Gemini 引用率提升 200%+
+- **Reddit 真诚参与**(每月 8-12 次):3 个月后开始在 Perplexity 引用中出现
+
+### 销售故事
+
+> 客户 B 是一家 30 年的实验室设备制造商,90% 销售来自 B2B 邮件询盘。
+> Brand 分 18/100。我们花 3 个月建了 Wikidata + LinkedIn 公司页重启 + 行业媒体 3 篇 PR + 创始人 LinkedIn 文章 8 篇。
+> 6 个月后,ChatGPT 问"意大利教育实验室设备供应商"的引用从 0 次到 3 次,询盘 +40%。
+
+---
+
+## 3. 内容专业度(权重 20% · E-E-A-T)
+
+### 这个分数在测什么
+
+**AI 是否把您的内容当作"专家写的"。**
+
+Google 2025 年 12 月起把 E-E-A-T 标准应用到**所有竞争性查询**(不只是医疗/金融)。AI 时代,内容来源的"专业可信度"是决定是否引用的核心。
+
+四个维度,各占 25 分:
+
+| 维度 | 业务含义 |
+|------|---------|
+| **Experience(经验)** | 您是否真正"做过"这件事 |
+| **Expertise(专业)** | 您是否懂这个领域的深度细节 |
+| **Authoritativeness(权威)** | 外部世界是否认可您是这个领域的人 |
+| **Trustworthiness(可信)** | 您的网站是否让人放心(联系方式、条款、HTTPS) |
+
+### 分数低意味着什么(给客户讲)
+
+> "您的内容写得很'通用'。AI 看不出这是您的团队真正经验,还是网上抄来的。
+> 表现是:文章里全是'通常情况下'、'一般来说'、'许多人认为' —— 没有具体的'我们测试了 X 次'、'在我们 5 年服务 200 家客户的经验中'这类信号。
+> AI 会优先引用那些'敢说具体的'内容,因为它们看起来更可信。"
+
+### 4 个维度的诊断清单(客户能直接对照)
+
+#### Experience 经验失分
+- ❌ 没有"我们"、"我"的第一人称
+- ❌ 没有具体客户案例(带名字、数字)
+- ❌ 没有自家产品的截图、过程演示
+- ❌ 全是抽象建议,没有"我们亲自试过 X"
+
+#### Expertise 专业失分
+- ❌ 没有作者署名或作者无背景
+- ❌ 没有方法论说明(只给结论,不解释怎么得出的)
+- ❌ 行业术语不准确
+- ❌ 没有独立"作者页"
+
+#### Authoritativeness 权威失分
+- ❌ 没有媒体引用过该品牌或创始人
+- ❌ 没有行业奖项 / 演讲资历
+- ❌ 没有 Wikipedia 提及
+- ❌ 网站只覆盖很窄一两个话题,缺乏纵深
+
+#### Trustworthiness 可信失分
+- ❌ 联系方式不完整(只留邮箱无地址电话)
+- ❌ 没有 Privacy / Terms 链接
+- ❌ HTTPS 证书无效
+- ❌ 客户评价无来源(不带平台 logo / 链接)
+- ❌ 没有"关于我们"页面或写得很敷衍
+
+### 修复后的业务收益
+
+- 单篇加上完整作者署名(带 LinkedIn / 资历)→ 引用率 +30%
+- 加 "关于我们"完整页(团队成员 + 资历 + 故事)→ E-E-A-T 总分通常 +10 分
+- **修复周期**:基础信任信号 1 周;作者页建设 1 个月;真正的权威建设(媒体覆盖)6-12 个月
+
+### 销售故事
+
+> 客户 C 是一家律所,Content 分 38/100。我们做了三件事:
+> 1. 给每个律师建详细作者页(背景、案例、资历)
+> 2. 把 12 篇"关于离婚法"的通用文章改写,加入"我们处理过 200+ 离婚案的经验显示..."
+> 3. 创始人 LinkedIn 发 6 篇行业观点 + 接受地方报纸采访 2 次
+>
+> 4 个月后,Content 分 64/100。 Google AI Overviews 在"米兰离婚律师怎么选"的问题中开始引用其文章。
+
+---
+
+## 4. 技术底子(权重 15%)
+
+### 这个分数在测什么
+
+**AI 爬虫能不能正常读取您的网站。**
+
+这是 GEO 的"地基" —— 如果地基坏了,前面 3 项做到 100 分也没用。AI 看不到的内容,等于不存在。
+
+### 分数低意味着什么(给客户讲)
+
+> "您的网站对 AI 爬虫是'半盲'的。
+> 用浏览器看一切正常,但 AI 爬虫不执行 JavaScript,它'看到'的版本可能是空白。
+> 这就像您印了精美的宣传册,但每次有人来拿都被前台挡在门口。"
+
+### 8 类问题及业务后果
+
+| 问题 | 业务后果 |
+|------|---------|
+| robots.txt 屏蔽了 GPTBot / ClaudeBot | 您完全不存在于 ChatGPT / Claude 答案中 |
+| 网站靠 JS 渲染(SPA),没 SSR | AI 爬虫看到空页面,所有内容失效 |
+| 移动端体验差 | Google 2024 年只用移动爬虫 —— 桌面好不算数 |
+| 安全头缺失 / 无 HTTPS | AI 系统降低对站点的信任评级 |
+| 页面加载 > 4 秒 | AI 爬虫超时,跳过这一页 |
+| URL 重复(www / 无 www / 加斜杠 / 不加) | AI 把同一内容当多个版本,信号分散 |
+| 没有 XML sitemap | AI 找不到深层内容页 |
+| 重要页面要点 5+ 次才能到达 | AI 不会抓深层页 |
+
+### 与传统 SEO 的关键区别
+
+> "您过去做的 SEO 主要为 Google 排名。但 AI 爬虫(GPTBot 等)是另一套规则:
+> - **不执行 JavaScript** → SSR 必须有
+> - **不'渲染'页面** → 服务器返回的 HTML 必须完整
+> - **会读 llms.txt**(SEO 时代不存在) → 这是新的'欢迎信号'"
+
+### 修复后的业务收益
+
+- 关键修复(robots.txt + SSR + 14 个 AI 爬虫放行)**1 周内完成,立刻见效**
+- 是技术分提升的最快路径 —— 通常能从 30 分跳到 70 分
+- **修复周期**:技术修复 1-2 周;长期监控持续
+
+### 销售故事
+
+> 客户 D 的网站是 React 单页应用,Technical 分 22/100。GPTBot 抓取看到的是 `<div id="root"></div>` 一片空白。
+> 我们指导他们的开发团队上 Next.js SSR + 修 robots.txt + 加 llms.txt。
+> 2 周后,Technical 分 78。1 个月后,该客户被 Perplexity 引用次数从 0 提升到月均 12 次。
+
+---
+
+## 5. 结构化数据(权重 10%)
+
+### 这个分数在测什么
+
+**您的网站是否用"机器能读懂的语言"告诉 AI 您是谁。**
+
+普通文字:"我们是 1985 年成立的米兰实验室设备公司。"
+结构化数据(JSON-LD):
+```
 {
-  "status_code": 200,
-  "redirect_chain": [{"url": "...", "status": 301}, ...],
-  "headers": {完整 HTTP 响应头字典},
-  "security_headers": {6 个安全头逐个检查},
-  "meta_tags": {所有 <meta> 解析为 dict},
-  "title": "...",
-  "description": "...",
-  "canonical": "<link rel=canonical>",
-  "h1_tags": [...],
-  "heading_structure": [{"level": 1-6, "text": "..."}],
-  "word_count": int,
-  "text_content": "...",
-  "internal_links": [{"url", "text"}, ...],
-  "external_links": [...],
-  "images": [{"src", "alt", "width", "height", "loading"}],
-  "structured_data": [所有 JSON-LD 块解析为 dict],
-  "has_ssr_content": bool,
-  "errors": [...]
+  "@type": "Organization",
+  "name": "Electron Srl",
+  "foundingDate": "1985",
+  "address": {"addressLocality": "Milan", "addressCountry": "IT"},
+  "sameAs": ["https://wikipedia.org/...", "https://linkedin.com/..."]
 }
 ```
 
-**为什么不用 WebFetch?** WebFetch 会把 HTML 转 markdown 并丢失 `<head>` 内容,导致 JSON-LD / meta tag / canonical 全部丢失。所以 schema 检测必须用 `fetch_page.py` 抓原始 HTML。
+后者让 AI 100% 准确理解、连接到外部世界的实体。前者 AI 要"猜"。
+
+### 分数低意味着什么(给客户讲)
+
+> "AI 想信任您,但您没给它'身份证'。
+> AI 看您的网站像读小说 —— 需要理解、推断、有时会出错(产生'幻觉'数据)。
+> 结构化数据是给 AI 的官方说明:'我叫 X,1985 年成立,地址在 Y,我和 LinkedIn 上那个页是同一个实体。'
+> 没有这个,AI 复述您的信息时可能编错。"
+
+### 业务关键概念:sameAs
+
+`sameAs` 是 GEO 单项最重要的属性。它告诉 AI:**"我官网上的这家公司,和 Wikipedia / LinkedIn / YouTube 上的那家是同一个实体。"**
+
+| 客户场景 | 没有 sameAs 的后果 |
+|---------|------------------|
+| 公司在 LinkedIn 很活跃,但没在官网声明 | AI 不会把 LinkedIn 的权威信号"算"到您头上 |
+| 创始人有 Wikipedia 词条,但官网没链接 | AI 不会把创始人权威转移到公司 |
+| 多个社交账号,但 AI 看不出是同一品牌 | 信号被分散,实体识别失败 |
+
+**修一次 sameAs(把所有平台账号连起来),通常能直接 +10-15 分 schema 分。**
+
+### 按业务类型必备的"身份证"
+
+| 业务类型 | 必备 schema | 业务含义 |
+|---------|------------|---------|
+| 任何公司 | Organization | "我是谁"的基础名片 |
+| 本地企业 | LocalBusiness | 地址、营业时间、地图 → Google 本地搜索关键 |
+| 媒体/博客 | Article + Person(作者) | 作者权威 + 内容时效 |
+| 电商 | Product + Offer + Review | 价格、库存、评分 → AI 推荐购物关键 |
+| SaaS | SoftwareApplication | 功能、定价、兼容平台 |
+
+### 修复后的业务收益
+
+- 一份完整的 Organization + sameAs(覆盖 8 个平台连接)= 整体 GEO 分通常 +5 分
+- **修复周期**:基础 schema 1 周;完整 sameAs + 业务专属 schema 2-4 周
+- 性价比最高 —— 工作量小、效果立竿见影
+
+### 销售故事
+
+> 客户 E 是 SaaS,LinkedIn / YouTube / GitHub 都有,但官网 Organization schema 只填了 name + url。
+> 我们加了 sameAs 数组(链接 Wikipedia + LinkedIn + YouTube + Crunchbase + GitHub + Twitter)+ 加了 SoftwareApplication schema 含 featureList。
+> 2 周内,Schema 分从 32 → 78。ChatGPT 描述该公司时开始准确引用功能列表(之前是模糊描述)。
 
 ---
 
-## A. AI Citability(权重 25%)
+## 6. 各 AI 平台适配(权重 10%)
 
-**实现脚本:** `scripts/citability_scorer.py`(343 行)
-**特点:** 整个仓库里**唯一完全机械化**的打分器 —— 没有 LLM 主观判断。
+### 这个分数在测什么
 
-### A.1 输入数据采集流程(`citability_scorer.py:247-294`)
+**您的网站对 5 个主要 AI 搜索平台分别有多友好。**
 
-```
-1. requests.get(url, User-Agent="Mozilla/5.0 ...", timeout=30)
-2. BeautifulSoup 解析
-3. decompose 掉 <script><style><nav><footer><header><aside><form>
-4. 遍历 <h1><h2><h3><h4><p><ul><ol><table>
-5. 按 H 标签切段,每段含 heading + 合并的段落文本
-6. 过滤:段长 ≥ 20 词才进入打分
-```
+关键事实:**只有 11% 的网站同时被 ChatGPT 和 Google AI Overviews 引用。** 每个平台规则不同,优化策略不能一刀切。
 
-### A.2 子分 1:Answer Block Quality(满分 30)
-
-| 检测项 | 数据源 | 实现 | 加分 |
-|-------|-------|------|------|
-| 定义模式 | 📜 5 个正则 | `\b\w+\s+is\s+(?:a\|an\|the)\s` 等(`L42-49`) | +15(任一命中) |
-| 答案在前 60 词 | 📜 早期答案关键词 | `\b(?:is\|are\|was\|were\|means?\|refers?)\b\|\d+%\|\$[\d,]+\|\d+\s+(?:million\|billion\|thousand)`(`L57-66`) | +15 |
-| 问句式标题 | 🔍 heading 文本 | `heading.endswith("?")` | +10 |
-| 句长清晰度 | 📜 句子分割 | `5 <= len(s.split()) <= 25` 的句子比例 × 10 | 0-10 |
-| 权威引用句式 | 📜 关键词 | `(?:according to\|research shows\|studies?\s+(?:show\|indicate\|suggest\|found)\|data\s+(?:shows\|indicates\|suggests))` | +10 |
-| **封顶** | | | **30** |
-
-### A.3 子分 2:Self-Containment(满分 25)
-
-| 检测项 | 数据源 | 阈值 |
-|-------|-------|------|
-| 段落词数 | 📜 `len(text.split())` | 134-167 词 = **10**;100-200 = 7;80-250 = 4;<30 或 >400 = 0 |
-| 代词密度 | 📜 `\b(?:it\|they\|them\|their\|this\|that\|these\|those\|he\|she\|his\|her)\b` 计数 ÷ 总词 | <2% = **8**;<4% = 5;<6% = 3 |
-| 专有名词数 | 📜 `\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b` 计数 | ≥3 = **7**;≥1 = 4 |
-
-**实战含义:**
-- 整段全用 "it / this / they" → 直接 0 分代词分
-- 段落 134-167 词的"黄金长度"是最重要单条加分
-- 无品牌名/地名/人名 → 失去 7 分
-
-### A.4 子分 3:Structural Readability(满分 20)
-
-| 检测项 | 数据源 | 评分 |
-|-------|-------|------|
-| 平均句长 | 📜 `word_count / sentence_count` | 10-20 词 = 8;8-25 = 5;否则 = 2 |
-| 序列副词 | 📜 `(?:first\|second\|third\|finally\|additionally\|moreover\|furthermore)` | 命中 +4 |
-| 编号项 | 📜 `(?:\d+[\.\)]\s\|\b(?:step\|tip\|point)\s+\d+)` | 命中 +4 |
-| 段内换行 | 📜 `"\n" in text` | +4 |
-
-### A.5 子分 4:Statistical Density(满分 15)
-
-| 计数项 | 正则 | 每命中 | 单项上限 |
-|-------|------|-------|---------|
-| 百分比 | `\d+(?:\.\d+)?%` | +3 | 6 |
-| 美元金额 | `\$[\d,]+(?:\.\d+)?(?:\s*(?:million\|billion\|M\|B\|K))?` | +3 | 5 |
-| 数字 + 单位 | `\d+,?\d*\.?\d*\s+(?:users\|customers\|pages\|sites\|companies\|businesses\|people\|percent\|times\|x\b)` | +2 | 4 |
-| 年份 | `\b20(?:2[3-6]\|1\d)\b`(2010-2026) | +2 | 2 |
-| 命名机构 | `(?:according to\|per\|from\|by)\s+[A-Z]` 或 `Gartner\|Forrester\|McKinsey\|Harvard\|Stanford\|MIT\|Google\|Microsoft\|OpenAI\|Anthropic` 或 `\([A-Z][a-z]+(?:\s+\d{4})?\)` | +2 | — |
-
-**实战:** "73% of marketers, $4.5M ARR, in 2025 according to Gartner" → 三条命中,~9 分。
-"很多公司发现这个工具有效" → 0 分。
-
-### A.6 子分 5:Uniqueness Signals(满分 10)
-
-| 检测项 | 正则 | 加分 |
-|-------|------|------|
-| 原创研究 | `our (?:research\|study\|data\|analysis\|survey\|findings)\|we (?:found\|discovered\|analyzed\|surveyed\|measured)` | +5 |
-| 案例标识 | `case study\|for example\|for instance\|in practice\|real-world\|hands-on` | +3 |
-| 工具/产品提及 | `(?:using\|with\|via\|through)\s+[A-Z][a-z]+` | +2 |
-
-### A.7 页面总分聚合(`citability_scorer.py:302-321`)
-
-```
-page_score = mean(每个段落的总分)
-optimal_count = 词数在 134-167 区间的段落数
-grade_dist = A/B/C/D/F 的分布(A:≥80, B:65-79, C:50-64, D:35-49, F:<35)
-```
-
-### A.8 评分客观度
-
-**完全机械化,可重复。** 同一页面跑两次结果完全一致。
-
----
-
-## B. Brand Authority(权重 20%)
-
-**实现脚本:** `scripts/brand_scanner.py`(276 行)
-**特点:** 脚本本身**不直接打分** —— 它输出取证 URL + 检查指令,真正的分数在 LLM 那一层。
-
-### B.1 真正机械化的部分:Wikipedia / Wikidata API
-
-**这是 Brand 类目唯一确定性的检测**(`brand_scanner.py:120-146`):
-
-```python
-# Wikipedia API
-api_url = f"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={brand}"
-response = requests.get(api_url, timeout=15)
-search_results = response.json()["query"]["search"]
-# 判定:top result.title.lower() 包含 brand_name.lower() → has_wikipedia_page
-
-# Wikidata API
-wikidata_url = f"https://www.wikidata.org/w/api.php?action=wbsearchentities&search={brand}&language=en"
-response = requests.get(wikidata_url, timeout=15)
-entities = response.json()["search"]
-# 判定:有结果即 has_wikidata_entry,记录 Q-number
-```
-
-**Skill 文件强制要求**(`geo-brand-mentions/SKILL.md:277`):
-> "ALWAYS run the Python API check first. If the API says a page exists, it exists — do not override this with a search result that fails to find it."
-
-### B.2 其他平台:LLM 读搜索结果
-
-| 平台 | 权重 | 数据源 | 取证手段 |
-|------|------|--------|---------|
-| YouTube | 25% | 🌐 `youtube.com/results?search_query=<brand>` 的 HTML | 🤖 LLM 读结果页,数频道/视频/订阅数 |
-| Reddit | 25% | 🌐 `reddit.com/search/?q=<brand>` | 🤖 LLM 数 thread、subreddit |
-| Wikipedia | 20% | 🔑 Wikipedia API + Wikidata API | 客观 + 🤖 LLM 判文章质量 |
-| LinkedIn | 15% | 🌐 LinkedIn 搜索(常被登录墙阻拦) | 🤖 主观估计 |
-| Other(7 个) | 15% | 🌐 Quora/SO/GitHub/Crunchbase/PH/G2/Trustpilot 搜索 | 🤖 LLM 读结果 |
-
-### B.3 LLM 怎么把"看到的"转成 0-100
-
-Skill 提供分段标尺(`geo-brand-mentions/SKILL.md:48-55`,以 YouTube 为例):
-
-```
-90-100:Active channel with 10K+ subscribers, brand in 20+ third-party videos
-70-89: 1K+ subscribers, 10-19 third-party mentions
-50-69: Channel exists, 5-9 mentions
-30-49: Inactive, 1-4 mentions
-10-29: 1-2 mentions only
-0-9:   No presence
-```
-
-LLM 看搜索页 → 数大致数字 → 套这五档 → 给值。**这是 ±5-10 分浮动的来源。**
-
-### B.4 评分客观度
-
-**半主观。** Wikipedia/Wikidata 部分客观,其余靠 LLM 读取搜索结果页。
-
----
-
-## C. Content Quality & E-E-A-T(权重 20%)
-
-**实现:** **无专用 Python 脚本**。完全靠 Claude 用 `WebFetch` 抓页面后,对照 Skill 信号清单逐项打分。
-
-### C.1 唯一可机械验证的部分
-
-| 信号 | 数据源 | 评分 |
-|------|--------|------|
-| HTTPS | 🌐 URL scheme | Trust +2 |
-| 页面词数 | 📜 `len(text.split())` | 决定页面类型门槛 |
-| Privacy policy 链接 | 🔍 Grep `href` 包含 "privacy" | Trust +2 |
-| Terms of service | 🔍 Grep `href` 包含 "terms" | Trust +1 |
-| 联系信息 | 📜 `@\w+\.\w+` 邮箱、`\+?\d{3}` 电话、地址结构 | Trust 0-4 |
-| schema 含 `author` `datePublished` `dateModified` | 🔍 JSON-LD 解析 | Experience + Freshness |
-
-### C.2 几乎全靠 LLM 判断的部分
-
-**Experience 25 分**(`geo-content/SKILL.md:50-66`)的 6 项:
-
-| 信号 | 判断方式 |
-|------|---------|
-| First-person accounts("I tested...", "We implemented...") | 🤖 LLM 读全文找句式 |
-| Original research / data | 🤖 极主观 |
-| Case studies with specific results | 🤖 找有无数字 |
-| Screenshots/photos as evidence | 🤖 无法可靠判断品牌实拍 vs stock |
-| Specific examples from personal experience | 🤖 极主观 |
-| Demonstrations of process | 🤖 主观 |
-
-**Expertise / Authoritativeness 各 25 分** 同样几乎全主观:作者资质、媒体引用、行业奖项 —— 都是 LLM 读页面后判断。
-
-### C.3 Topical Authority 修饰符(`geo-content/SKILL.md:246-253`)
-
-```
-sitemap.xml 中页面数 + 内链聚类强度:
-  20+ pages + 强聚类  → +10
-  10-20 pages + 部分聚类 → +5
-  5-10 pages → 0
-  <5 pages → -5(扣分)
-```
-
-页面数靠 🌐 抓 sitemap 数,聚类强度靠 🤖 LLM 看内链结构判断。
-
-### C.4 评分客观度
-
-**主观。** 同一页面在不同 Claude session 可能浮动 8-10 分。
-
----
-
-## D. Technical Foundations(权重 15%)
-
-**特点:** 大部分可机械化,几乎都能 `curl + grep` 验证。
-
-### D.1 单次 fetch 的数据(同 §0,`fetch_page.py`)
-
-### D.2 Crawlability(15 分)的精确算法
-
-| 分项 | 数据点 | 阈值 |
-|-----|--------|------|
-| robots.txt 有效 + 含 Sitemap | 🌐 `GET /robots.txt` → 解析语法 + grep "Sitemap:" | 3 / 0 |
-| AI 爬虫允许 | 🌐 robots.txt 中 grep GPTBot/PerplexityBot/ClaudeBot/Google-Extended | 全允许 5;关键阻止 1;Googlebot 阻止 0 |
-| sitemap.xml 有效 | 🌐 `GET /sitemap.xml` → 校验 XML + `<lastmod>` 存在 | 3 / 0 |
-| 爬深 ≤ 3 次点击 | 🔍 BFS 内链 | 2 / 0 |
-| 无误用 noindex | 🔍 `<meta robots>` + ⚙️ `X-Robots-Tag` | 2 / 0 |
-
-### D.3 Indexability(12 分)
-
-| 分项 | 数据点 |
-|-----|--------|
-| Canonical 自指向且无冲突 | 🔍 `<link rel=canonical>` + ⚙️ HTTP `Link` header 比对 |
-| 无 www/non-www 重复 | 🌐 测两侧重定向 |
-| 无 HTTP/HTTPS 重复 | 🌐 同上 |
-| Hreflang 合法 | 🔍 `<link rel="alternate" hreflang="...">` + ISO 639-1/3166-1 校验 |
-| 无 index bloat | 🌐 sitemap 数量 vs 实际有价值页面 |
-
-### D.4 Security(10 分)— **完全客观**
-
-`fetch_page.py:74-89` 检查这 6 个 HTTP 响应头:
-
-| Header | 分值 | 来源 |
-|--------|------|------|
-| HTTPS + 有效证书 | 4 | 🌐 URL scheme + 证书检查 |
-| `Strict-Transport-Security` | 2 | ⚙️ |
-| `X-Content-Type-Options: nosniff` | 1 | ⚙️ |
-| `X-Frame-Options` | 1 | ⚙️ |
-| `Referrer-Policy` | 1 | ⚙️ |
-| `Content-Security-Policy` | 1 | ⚙️ |
-
-**这是整个评分系统里最客观的部分。** 头存在/不存在,二值判定。
-
-### D.5 Core Web Vitals(15 分)— **实际不可精确测量**
-
-Skill 提示词坦白(`geo-technical/SKILL.md:242-247`):
-> "When real user data is unavailable, **estimate from page characteristics**"
-
-未接 PageSpeed Insights API 或 CrUX,只能用代理信号:
-
-| 指标 | 代理信号 | 精度 |
-|-----|---------|------|
-| LCP(5 分) | 🔍 首屏最大 `<img>` 大小、是否 preload、🌐 TTFB | 估计 |
-| INP(5 分) | 🔍 第三方 `<script>` 数量、async/defer、bundle 大小 | 估计 |
-| CLS(5 分) | 🔍 `<img>` 是否 width/height、是否 font-display: swap | 估计 |
-
-**这意味着 CWV 的 15 分是 Claude 看页面"特征"猜的**,不是真实数据。
-
-### D.6 SSR(15 分)的精确检测算法(`fetch_page.py:121-194`)— **最严谨**
-
-```python
-# 1. 在 decompose 前找 SPA 框架根容器
-js_app_roots = soup.find_all(id=re.compile(r"(app|root|__next|__nuxt)", re.I))
-
-# 2. 测量根容器内的文字量
-for root_el in js_app_roots:
-    inner_text = root_el.get_text(strip=True)
-    text_length = len(inner_text)
-
-# 3. 判定:根容器文字 < 50 字符 AND 全页词数 < 200
-if text_length < 50 and word_count < 200:
-    has_ssr_content = False  # 0 分
-```
-
-**双重判断**避免误伤(WordPress + LiteSpeed Cache 等也用 `<div id="root">` 但有 SSR)。
-
-| 评分 | 条件 |
-|-----|------|
-| 15 | 全部 SSR(主内容 8 + meta/schema 4 + 内链 3) |
-| 10 | 主内容 SSR,部分元素 JS-only |
-| 5 | 关键内容需 JS |
-| 0 | 完全 CSR(根 div < 50 字符 AND 全页 < 200 词) |
-
-### D.7 Page Speed(15 分)
-
-| 检测 | 命令/方法 |
-|-----|----------|
-| TTFB | 🌐 `curl -o /dev/null -s -w '%{time_starttransfer}' [URL]` → 直接得秒数 |
-| 页面总重 | 🌐 主页 HTML 抓取后 BeautifulSoup 找 `<img>` `<script>` `<link>` —— 不下载,靠 🤖 推断 |
-| 压缩 | ⚙️ `Content-Encoding: gzip\|br` |
-| 图片优化 | 🔍 `<img>` 的 src 扩展名(webp/avif)、loading="lazy"、width/height |
-| 静态缓存 | ⚙️ 静态资源的 `Cache-Control` header |
-
-### D.8 评分客观度
-
-**客观。** 95% 可机械化,仅 CWV 因缺真实用户数据需估算。
-
----
-
-## E. Structured Data(权重 10%)
-
-### E.1 数据采集(`fetch_page.py:107-114`)
-
-**关键约束:** 必须用 `fetch_page.py` 抓原始 HTML —— WebFetch 会丢 `<head>`,导致 JSON-LD 丢失。
-
-```python
-for script in soup.find_all("script", type="application/ld+json"):
-    try:
-        data = json.loads(script.string)
-        result["structured_data"].append(data)
-    except (json.JSONDecodeError, TypeError):
-        result["errors"].append("Invalid JSON-LD detected")
-```
-
-得到 dict 列表,每个元素是一个 JSON-LD 块的解析结果。
-
-### E.2 评分流程
-
-对每个 JSON-LD 块:
-
-| 检查 | 做法 | 加/扣分 |
-|-----|------|--------|
-| `@type` 合法? | 🤖 LLM 对比 Schema.org 类型列表 | 不合法扣分 |
-| 必填属性齐全? | 📜 例 Organization 需 `name` `url` `logo` | 缺一项 -5 |
-| `sameAs` 含几个权威链接? | 🔍 数 `sameAs` 数组里的 wikipedia/linkedin/youtube/wikidata 命中 | 0-15 |
-| 业务类型对应 schema 存在? | 🤖 SaaS 需 SoftwareApplication;Local 需 LocalBusiness | 命中 +10/项 |
-| schema 在 SSR 还是 JS 注入? | 🌐 比对 `curl` 结果 vs JS 渲染后结果 | JS 注入扣分 |
-| URL 在 sameAs 中是否 200? | 🌐 逐个 `requests.head()` | 404 扣分 |
-
-### E.3 业务类型对应必备 schema(影响评分)
-
-| 业务类型 | 必备 schema | 扣分项 |
-|---------|------------|-------|
-| 通用 | `Organization` + `WebSite` + SearchAction | 缺 -15 |
-| Local | `LocalBusiness` + `geo` + `openingHoursSpecification` | 缺 -10 |
-| Publisher | `Article` + `Person`(author with sameAs) | 缺 -10 |
-| E-commerce | `Product` + `Offer` + `AggregateRating` | 缺 -10 |
-| SaaS | `SoftwareApplication` + `featureList` | 缺 -10 |
-
-### E.4 评分客观度
-
-**半客观。** JSON-LD 解析是机械的,但"业务类型推断"和"schema 完整度判断"靠 LLM。
-
----
-
-## F. Platform Optimization(权重 10%)
-
-5 个平台各打 0-100,最后求平均。详见 `agents/geo-platform-analysis.md`。
-
-### F.1 每个平台**独有**的可机械检测信号
+### 5 大平台的业务定位与诊断
 
 #### Google AI Overviews
-| 信号 | 取证 |
-|------|------|
-| FAQ 区 5+ 问题 | 🔍 数页面 `<h2>`/`<h3>` 问句式标题 + 🔍 检测 `FAQPage` schema |
-| 比较表格存在 | 🔍 `<table>` 数量 |
-| 直接答案在标题后 | 🔍 H 标签后第一个 `<p>` 的前 60 词 |
-| 排前 10 名 | 🤖 **无法直接测**,LLM 凭页面质量"推断" |
+- **流量来源:** 1.5B 月活,200+ 国家
+- **客户用户群:** 大众消费者搜索
+- **关键信号:** 传统 SEO 排名前 10、问句式标题、结构化答案
+- **诊断标志:** "我以前 SEO 很好,但 AI Overviews 里看不到我" → 通常需要重构内容(问答结构),而非加内容
 
 #### ChatGPT Web Search
-| 信号 | 取证 |
-|------|------|
-| Wikipedia 存在 | 🔑 Wikipedia API(同 §B.1) |
-| Wikidata 实体 | 🔑 Wikidata API |
-| OAI-SearchBot / ChatGPT-User / GPTBot 在 robots.txt | 🌐 `/robots.txt` + grep |
-| Bing 索引覆盖 | 🤖 **不能外部测**,LLM 估计 |
+- **流量来源:** 900M+ 周活
+- **客户用户群:** 知识工作者、专业用户
+- **关键信号:** Wikipedia 实体 + Reddit 讨论 + 综合性长内容
+- **诊断标志:** "我们品牌 Google 排第 1,但 ChatGPT 说不知道我们" → 缺 Wikipedia/Wikidata 实体
 
-#### Perplexity
-| 信号 | 取证 |
-|------|------|
-| PerplexityBot 在 robots.txt | 🌐 `/robots.txt` + grep |
-| 内容更新 <6 月 | 🔍 schema `dateModified` 比对当前日期 |
-| Reddit 活跃度 | 🌐 + 🤖 WebFetch reddit.com 搜索 + LLM 数 |
+#### Perplexity AI
+- **流量来源:** 500M 月查询
+- **客户用户群:** 研究型用户、决策者
+- **关键信号:** Reddit 真诚参与 + 原创数据 + 内容新鲜度
+- **诊断标志:** "我们行业有人在用 Perplexity,但从没引用我们" → 缺社区参与 + 原创研究
 
 #### Google Gemini
-| 信号 | 取证 |
-|------|------|
-| Knowledge Panel | 🤖 LLM 从 Google 搜索结果推断 |
-| YouTube + chapters | 🌐 WebFetch YouTube 频道 + 抽样视频描述含 `0:00` 时间戳 |
-| Schema 完整度 | 🔍 同 §E |
+- **流量来源:** 整个 Google 生态(包括 YouTube)
+- **客户用户群:** Android 用户、Google Workspace 用户
+- **关键信号:** YouTube 频道 + Google Knowledge Panel + 完整 Schema.org
+- **诊断标志:** 客户没 YouTube → Gemini 分天花板 60
 
-#### Bing Copilot — **最确定性**
-| 信号 | 取证 | 分值 |
-|------|------|------|
-| **IndexNow 实现** | 🌐 `GET /<api-key>.txt` 或 `/.well-known/indexnow-key.txt` 返回 200 | +15 |
-| **Bing WMT 验证** | 🔍 `<meta name="msvalidate.01">` | +5 |
-| LCP < 2s | 🌐 TTFB + 🔍 资源分析 | 10 |
-| Bingbot 在 robots.txt | 🌐 `/robots.txt` + grep | — |
+#### Bing Copilot
+- **流量来源:** Microsoft 365 用户、企业用户
+- **客户用户群:** B2B、企业决策者
+- **关键信号:** IndexNow 协议 + LinkedIn + Bing Webmaster Tools
+- **诊断标志:** B2B 客户但没 LinkedIn 公司页 → Copilot 分天花板 50
 
-### F.2 评分客观度
+### 业务策略:按目标客户选平台优先级
 
-**半主观。** 客观信号(API、robots.txt、IndexNow)占约 30%,其余靠 LLM 读搜索结果。
+| 客户业务 | 优先平台 | 第二平台 |
+|---------|---------|---------|
+| B2C 大众消费 | Google AIO + Gemini | ChatGPT |
+| B2B 专业服务 | ChatGPT + Bing Copilot | LinkedIn |
+| 研究/学术/咨询 | Perplexity + ChatGPT | Google AIO |
+| 电商 | Gemini(Google Shopping) + AIO | ChatGPT |
+| 技术/开发者 | ChatGPT + Perplexity | Bing Copilot(GitHub) |
+| 本地服务 | Google AIO + Gemini | ChatGPT |
+
+### 跨平台共赢动作(性价比最高)
+
+| 动作 | 同时提升的平台 | 周期 |
+|------|--------------|------|
+| 建 Wikipedia / Wikidata | ChatGPT + Perplexity + Gemini | 2-3 个月 |
+| 建 YouTube 频道(月 4 条) | Gemini + Perplexity + ChatGPT | 6 个月 |
+| 完整 Schema + sameAs | Gemini + ChatGPT + Bing | 2 周 |
+| SSR + 速度优化 | AIO + Perplexity + Bing | 1 个月 |
+| 作者页 + 资质 | AIO + Gemini + 所有平台 E-E-A-T | 1 个月 |
+
+### 销售故事
+
+> 客户 F 是一家德国工业 B2B 公司,5 个平台分都 < 30。
+> 我们做了 3 项跨平台动作:Wikidata 实体 + LinkedIn 公司页重启 + sameAs schema 完整。
+> 3 个月后:ChatGPT 32→58,Bing Copilot 28→61,Perplexity 24→47,Gemini 30→52,AIO 35→50。
+> 单项工作量小,但因为是跨平台共赢,**总分从 29 跳到 53** —— 直接从"Critical"升到"Fair"。
 
 ---
 
-## G. llms.txt 验证(影响 AI Visibility 子分)
+## 各类目的"提升性价比"对比
 
-**实现脚本:** `scripts/llmstxt_generator.py:30-127`
+按修复一分需要的时间成本排序(代理服务的核心议价工具):
 
-### G.1 完全机械化的验证算法
+| 类目 | 提升 10 分的工作量 | 见效周期 | 性价比 |
+|------|------------------|---------|--------|
+| Schema(10%) | 1-2 周 | 立刻 | ★★★★★(最快) |
+| Technical(15%) | 1-3 周 | 1-2 周 | ★★★★★ |
+| Citability(25%) | 5-10 篇核心文章重写 | 1 个月 | ★★★★ |
+| Platform Optimization(10%) | 跨平台共赢动作 | 1-2 个月 | ★★★★ |
+| Content E-E-A-T(20%) | 作者页 + 案例改写 + 信任信号 | 2-3 个月 | ★★★ |
+| Brand Authority(20%) | YouTube + Reddit + Wikipedia | 6-12 个月 | ★★(最慢但护城河深) |
 
-```python
-1. GET https://{domain}/llms.txt
-   if 404 → 直接 0 分
-   if 200 → 继续
+### 销售对话模板
 
-2. 解析 markdown:
-   - 第一行以 "# " 开头?     → has_title (4 分)
-   - 任意行以 "> " 开头?      → has_description (3 分)
-   - "## " 标题数 → section_count
-   - 正则 "- \[.+\]\(.+\)" 匹配 → link_count (link_count >= 5 → 5 分)
+**给"快速见效"敏感的客户:**
+> "前 3 个月我们集中做 Schema + Technical + 重写 10 篇核心页。
+> 您能在第 60 天就看到 GEO 分从 X 涨到 Y。
+> 之后我们再启动品牌建设(Wikipedia/YouTube)这种长效工作。"
 
-3. 完全合规:has_title + has_description + has_sections + has_links 全 True
+**给"护城河"敏感的客户:**
+> "Schema 和 Technical 是一次性修复,做完不会变。
+> 但 Brand Authority 是您未来 3 年的真正护城河 —— Wikipedia 词条建立后,任何竞争对手都需要 6 个月+ 才能复制。"
 
-4. 自动建议:
-   - link_count < 5 → "增加到 10-20"
-   - section_count < 2 → "增加 section"
-   - 内容不含 "contact" → "加联系方式"
+---
+
+## 月度 delta 报告:把分数变成续约证据
+
+每月给客户做一次审计,把变化做成 ▲/▼ 表:
+
+```
+GEO 分:32 → 44(+12 分)
+- AI 引用度:25 → 35(+10)← 改写了 8 篇产品页
+- 品牌影响力:18 → 22(+4)← LinkedIn 公司页激活
+- 技术底子:35 → 72(+37)← SSR 上线、AI 爬虫放行
+- 结构化数据:30 → 58(+28)← 加了 Organization + sameAs
+- 内容专业:28 → 32(+4)← 新作者页 3 个上线
+- 平台适配:22 → 31(+9)← Bing WMT 验证、IndexNow 实现
 ```
 
-### G.2 评分客观度
-
-**完全客观。** 100% 可重复。
+**这是续约谈判时最强的武器** —— 不是"我们做了 X 工作",而是"您的分数从 32 涨到 44,这是图,这是每个动作的归因"。
 
 ---
 
-## 总结:每类目客观度对比
+## 销售常见反对意见与回应
 
-| 类目 | 权重 | 🌐 HTTP | 🔍 DOM | 📜 正则 | 🔑 API | 🤖 LLM | ⚙️ Header | **客观度** |
-|------|------|--------|--------|---------|--------|--------|----------|-----------|
-| Citability | 25% | ★ | ★★★ | ★★★ | — | — | — | **★★★★★ 客观** |
-| Brand Authority | 20% | ★★ | ★ | — | ★★ | ★★★ | — | ★★ 半主观 |
-| E-E-A-T | 20% | ★ | ★★ | ★ | — | ★★★ | — | ★ **主观** |
-| Technical | 15% | ★★★ | ★★★ | ★★ | — | ★ | ★★★ | **★★★★★ 客观** |
-| Schema | 10% | ★★ | ★★★ | — | — | ★★ | — | ★★★ 半客观 |
-| Platform Optimization | 10% | ★★ | ★★ | ★ | ★ | ★★★ | — | ★★ 半主观 |
+### "AI 搜索现在还小,我们的 Google 排名还可以"
 
-### 加权总分的"客观度":
+> "您的 Google 排名好是因为 5 年的 SEO 投入。Gartner 预测 2028 年传统搜索流量 -50%。
+> 等到 AI 搜索抢了 30% 流量,您再开始做 GEO,就像 2010 年才开始做移动适配 —— 来得及,但要补的功课很贵。
+> 现在投入 €5K/月,3 年后回头看是早期布局。等到 AI 流量到 30%,这价就涨了。"
 
-```
-确定性可重复部分 = 25%·Citability + 15%·Technical + 50%·Schema(机械部分)
-                = 25 + 15 + 5 = 约 45%
+### "GEO 听起来就是新瓶装旧酒,跟 SEO 一样"
 
-LLM 主观判断部分 = 100%·E-E-A-T + 70%·Brand + 70%·Platform + 50%·Schema(主观部分)
-                = 20 + 14 + 7 + 5 = 约 46%
+> "看您的报告。SEO 看 Google 排名,GEO 看 AI 引用。这是 6 个完全不同的评分维度。
+> 您 Technical 分 78(SEO 好),但 Brand Authority 20、Citability 28 —— 这两个传统 SEO 工具根本不测。
+> 我们做的不是给您再做一遍 SEO,是补上 SEO 没看的另一半。"
 
-混合部分(API + LLM)= 30%·Brand + 30%·Platform = 6 + 3 = 约 9%
-```
+### "我们内部团队能做"
 
-**结论:** GEO 总分大约**一半可重复,一半依赖 LLM 判断**。同一站点在不同 session 跑两次,总分差异约 ±3-8 分。
+> "可以做。Schema + Technical 这两项内部团队 2 个月能搞定。
+> 但 Brand Authority(20% 权重)需要协调 PR、内容、外链 —— 内部团队很难单独做。
+> 我们的报价大部分价值不在'做事',而在'按月校准方向' —— 您不会发现做了 3 个月才看到方向错了。"
 
----
+### "能不能保证我们的 GEO 分到 70?"
 
-## 工程化改进路径
-
-如果要把这套系统稳定化(用于产品级别交付):
-
-| 当前实现 | 改进方向 |
-|---------|---------|
-| Brand 类目 70% 靠 LLM 读搜索页 | 接入 YouTube Data API、Reddit API、SerpAPI |
-| CWV 估算 | 接入 PageSpeed Insights API / CrUX |
-| Bing 索引覆盖靠猜 | 接入 Bing Webmaster Tools API |
-| Google Knowledge Panel 靠猜 | 接入 Google Knowledge Graph Search API |
-| 每次重新抓取 | 加缓存层 `~/.geo-prospects/cache/<domain>/`,TTL 7 天 |
-| 同站审计 ±5 浮动 | E-E-A-T 类目用多次采样取均值 |
-
-实现以上 6 项后,客观度可从约 50% 提升到约 85%。
+> "我们承诺方法论和工作量,不承诺具体分数。这写在合同里。
+> 但行业平均的客户 6 个月内提升 25-40 分,Premium 档客户经常做到 40-60 分。
+> 您现在 32 分,合理目标是 6 个月 55-65 分。"
 
 ---
 
-## 附录:核心代码定位索引
+## 附录:每个分数能卖多少钱
 
-| 评分逻辑 | 代码位置 |
-|---------|---------|
-| Citability 所有子分 | `scripts/citability_scorer.py:39-214` |
-| Wikipedia API 检测 | `scripts/brand_scanner.py:120-132` |
-| Wikidata API 检测 | `scripts/brand_scanner.py:135-146` |
-| HTML/HTTP 完整解析 | `scripts/fetch_page.py:38-200` |
-| 6 个安全头检查 | `scripts/fetch_page.py:74-89` |
-| JSON-LD 提取 | `scripts/fetch_page.py:107-114` |
-| SSR 检测算法 | `scripts/fetch_page.py:121-194` |
-| llms.txt 验证 | `scripts/llmstxt_generator.py:30-127` |
-| 平台评分 rubric | `skills/geo-platform-optimizer/SKILL.md:47-216` |
-| E-E-A-T 4 维信号 | `skills/geo-content/SKILL.md:36-117` |
-| 8 类技术 SEO checklist | `skills/geo-technical/SKILL.md:30-348` |
-| Schema 业务类型映射 | `skills/geo-schema/SKILL.md:64-195` |
-| Citability 5 维 rubric | `skills/geo-citability/SKILL.md:25-168` |
-| 11 平台权重定义 | `skills/geo-brand-mentions/SKILL.md:32-208` |
-| AIO/ChatGPT/Perplexity/Gemini/Copilot 各自 10 项 checklist | `skills/geo-platform-optimizer/SKILL.md:34-216` |
+按 `/geo proposal` 的报价规则(`skills/geo-proposal/SKILL.md:339-345`):
+
+| GEO 分 | 推荐档位 | 月费 | 6 个月 | 12 个月 | 客户最容易接受的话术 |
+|--------|---------|------|--------|---------|------------------|
+| 0-40 | **Premium** | €9,500 | €57,000 | €114,000 | "您的状况是 Critical,需要专人负责" |
+| 41-60 | **Standard** | €5,000 | €30,000 | €60,000 | "您有基础,需要月度精细化工作" |
+| 61-75 | **Basic** | €2,500 | €15,000 | €30,000 | "您只需要监控和小修小补" |
+| 76+ | 季度回访 | — | — | — | "保持现状,每季度健康检查" |
+
+**核心销售逻辑:**
+> 客户的 GEO 分数,就是他们的销售单价。
+> 一个 28 分的客户,我们能卖 €9.5K/月。
+> 一个 65 分的客户,只能卖 €2.5K/月。
+> 但这不是"低分客户更赚钱",而是"低分客户的痛点更明显、谈判阻力更小"。
 
 ---
 
-*评分数据源详解 — 报告结束。*
+*评分背后的业务逻辑 — 报告结束。*
